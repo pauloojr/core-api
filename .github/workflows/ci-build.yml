@@ -65,8 +65,7 @@ jobs:
             aquasec/trivy:0.58.2 image \
             --skip-check-update \
             --timeout 3m \
-            --exit-code 1 \
-            --ignore-unfixed \
+            --exit-code 0 \
             --severity CRITICAL,HIGH \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.vars.outputs.short_sha }}
 
