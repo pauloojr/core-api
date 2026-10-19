@@ -32,6 +32,11 @@ jobs:
           go-version: "1.23"
           cache: true
 
+      - name: "Download Go Dependencies"
+        run: |
+          go mod download
+          go mod tidy
+
       - name: "Run Go Vet & Unit Tests"
         run: |
           go vet ./...
