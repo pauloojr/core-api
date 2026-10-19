@@ -1,0 +1,117 @@
+name: "Core API CI/CD & GitOps Updater"
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+jobs:
+  test-build-scan:
+    name: "Test, Build & Trivy Scan"
+    runs-on: ubuntu-latest
+    outputs:
+      short_sha: ${{ steps.vars.outputs.short_sha }}
+
+    steps:
+      - name: "Checkout Source Code"
+        uses: actions/checkout@v4
+
+      - name: "Set up Go 1.23"
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: "Run Go Vet & Unit Tests"
+        run: |
+          go vet ./...
+          go test -v ./...
+
+      - name: "Extract Short Git SHA"
+        id: vars
+        run: echo "short_sha=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+
+      - name: "Set up Docker Buildx"
+        uses: docker/setup-buildx-action@v3
+
+      - name: "Build Local Image for Scanning"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.vars.outputs.short_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: "Run Trivy Vulnerability Scanner on Distroless Image"
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.58.2 image \
+            --skip-check-update \
+            --timeout 3m \
+            --exit-code 1 \
+            --ignore-unfixed \
+            --severity CRITICAL,HIGH \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.vars.outputs.short_sha }}
+
+      - name: "Log in to GitHub Container Registry (GHCR)"
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push Image to GHCR"
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.vars.outputs.short_sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v1.0.0
+          cache-from: type=gha
+
+  update-gitops:
+    name: "Update GitOps Manifests (kind-gitops-lab)"
+    needs: test-build-scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: "Clone GitOps Repository"
+        uses: actions/checkout@v4
+        with:
+          repository: pauloojr/kind-gitops-lab
+          token: ${{ secrets.GITOPS_PAT }}
+          branch: main
+          path: gitops-repo
+
+      - name: "Update Image Tag in Deployment Manifest"
+        run: |
+          cd gitops-repo
+          NEW_IMAGE="ghcr.io/pauloojr/core-api:sha-${{ needs.test-build-scan.outputs.short_sha }}"
+          sed -i "s|image: .*|image: ${NEW_IMAGE}|g" manifests/core-app/deployment.yaml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifests/core-app/deployment.yaml
+
+          if git diff --staged --quiet; then
+            echo "Nenhuma alteracao detectada no manifesto."
+          else
+            git commit -m "chore(gitops): atualizar imagem core-api para sha-${{ needs.test-build-scan.outputs.short_sha }}"
+            git push origin main
+          fi
