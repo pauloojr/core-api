@@ -102,6 +102,7 @@ jobs:
           token: ${{ secrets.GITOPS_PAT }}
           branch: main
           path: gitops-repo
+          persist-credentials: true
 
       - name: "Update Image Tag in Deployment Manifest"
         run: |
