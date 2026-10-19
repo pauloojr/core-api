@@ -101,12 +101,16 @@ jobs:
           repository: pauloojr/kind-gitops-lab
           token: ${{ secrets.GITOPS_PAT }}
           branch: main
-          path: gitops-repo
+          path: 'gitops-repo'
           persist-credentials: true
 
       - name: "Update Image Tag in Deployment Manifest"
         run: |
           cd gitops-repo
+          
+          # Configurar autenticacao explicita com o GITOPS_PAT no remote origin
+          git remote set-url origin https://x-access-token:${{ secrets.GITOPS_PAT }}@github.com/pauloojr/kind-gitops-lab.git
+
           NEW_IMAGE="ghcr.io/pauloojr/core-api:sha-${{ needs.test-build-scan.outputs.short_sha }}"
           sed -i "s|image: .*|image: ${NEW_IMAGE}|g" manifests/core-app/deployment.yaml
 
